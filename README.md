@@ -19,6 +19,55 @@ It simplifies legal text into **clear summaries**, highlights **red-flag clauses
 - **Pandas**, **PyPDF2**, **NER (spaCy)**
 
 ---
+## 📁 Project Structure
+```
+PrivAware/
+│
+├── backend/
+│   ├── api.py
+│   ├── main.py
+│   ├── prompt_template.py
+│   │
+│   ├── data/
+│   │   ├── opp.json
+│   │   └── medical_consents.json
+│   │
+│   ├── indexing/
+│   │   └── indexer.py
+│   │
+│   ├── loaders/
+│   │   └── loaders.py
+│   │
+│   ├── models/
+│   │   ├── scoring.py
+│   │   └── train_classifier.py
+│   │
+│   ├── rag/
+│   │   └── rag_chain.py
+│   │
+│   └── retrieval/
+│       ├── __init__.py
+│       └── retriever.py
+│
+├── frontend/
+│   └── streamlit_app.py
+│
+├── indexes/
+│   ├── faiss_med.index
+│   ├── faiss_opp.index
+│   ├── meta_med.pkl
+│   └── meta_opp.pkl
+│
+├── models/
+│   └── label_clf.pkl
+│
+├── .env
+├── README.md
+└── requirements.txt
+```
+
+
+
 
 ## ⚙️ Setup Instructions
 ```bash
@@ -28,10 +77,15 @@ cd PrivAware
 
 # Create virtual environment
 python -m venv .venv
-source .venv/bin/activate  # (Windows: .venv\Scripts\activate)
+.venv\Scripts\activate       # On Windows
+source .venv/bin/activate    # On Mac/Linux
 
 # Install dependencies
 pip install -r requirements.txt
+(If Streamlit installation fails, run:
+pip install streamlit --no-deps
+pip install protobuf pandas numpy)
 
 # Run the app
-streamlit run app.py
+uvicorn backend.main:app --reload (Backend: FastAPI)
+python -m streamlit run frontend/streamlit_app.py (Frontend: Streamlit)
