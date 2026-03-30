@@ -76,7 +76,7 @@ git clone https://github.com/<your-username>/PrivAware.git
 cd PrivAware
 
 # Create virtual environment
-python -m venv .venv
+C:\python311\python.exe" -m venv .venv
 .venv\Scripts\activate       # On Windows
 source .venv/bin/activate    # On Mac/Linux
 
