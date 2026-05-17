@@ -1,5 +1,6 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from backend.api import router as api_router
 
 app = FastAPI(title="PrivAware API")
 
@@ -12,37 +13,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# mount API router (contains /analyze and /evaluate)
+app.include_router(api_router)
+
 @app.get("/")
 def root():
     return {"message": "PrivAware backend running!"}
-
-@app.post("/analyze")
-async def analyze(file: UploadFile = File(...)):
-    """
-    Accepts uploaded document (text/pdf/image), extracts text, 
-    and performs basic analysis (mock RAG pipeline placeholder).
-    """
-    try:
-        contents = await file.read()
-        text = contents.decode("utf-8", errors="ignore")
-
-        # Basic simulation — later replace with real RAG + Gemini logic
-        risk_terms = ["share", "data", "third party", "track", "collect"]
-        found = [term for term in risk_terms if term in text.lower()]
-
-        summary = (
-            f"The document '{file.filename}' was analyzed. "
-            f"Detected {len(found)} potential data risk terms: {', '.join(found)}."
-        )
-
-        return {
-            "filename": file.filename,
-            "word_count": len(text.split()),
-            "red_flags": found,
-            "trust_score": max(0, 100 - len(found) * 10),
-            "summary": summary,
-            "consent_recommendation": "No" if len(found) > 3 else "Yes"
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))

@@ -1,23 +1,63 @@
-import os, json, re
 from dotenv import load_dotenv
-import google.generativeai as genai
+import os
+import json
+
+load_dotenv()
+
 from backend.retrieval.retriever import FaissRetriever, Reranker
 from backend.prompt_template import RAG_PROMPT
 
-load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+# LAZY IMPORT: defer ragas import to avoid startup-time C extension issues
+_evaluate_rag_pipeline = None
+
+def get_evaluate_rag_pipeline():
+    global _evaluate_rag_pipeline
+    if _evaluate_rag_pipeline is None:
+        try:
+            from backend.evaluation.ragas_eval import evaluate_rag_pipeline
+            _evaluate_rag_pipeline = evaluate_rag_pipeline
+        except ImportError as e:
+            print(f"⚠️  RAGAS not available: {e}")
+            _evaluate_rag_pipeline = None
+    return _evaluate_rag_pipeline
 
 def build_evidence_block(retrieved):
-    lines=[]
-    for i,r in enumerate(retrieved):
-        lines.append(f"[{i}] {r['text'][:800].replace('\\n',' ')}")
+    lines = []
+    for i, r in enumerate(retrieved or []):
+        text = ""
+        if isinstance(r, dict):
+            text = r.get("text") or r.get("page_content") or r.get("pageContent") or ""
+        elif hasattr(r, "page_content"):
+            text = getattr(r, "page_content") or ""
+        else:
+            try:
+                text = str(r)
+            except Exception:
+                text = ""
+        text = text.replace("\n", " ")[:800]
+        lines.append(f"[{i}] {text}")
     return "\n\n".join(lines)
 
 def call_gemini(prompt_text):
-    model = genai.models.get("gemini-1.5-pro")  # adapt if SDK uses another call
-    # NOTE: SDK may use different call; adapt to your installed google-generativeai version
-    resp = genai.generate_text(model=model, text=prompt_text)  # pseudo; replace with working call
-    return resp.text if hasattr(resp, 'text') else str(resp)
+    """Lazy-import google.generativeai"""
+    try:
+        import google.generativeai as genai
+    except Exception as e:
+        print(f"⚠️  Gemini not available: {e}. Returning mock response.")
+        return '{"summary":"Mock analysis","key_points":["Mock point"],"trust_score":50,"consent_recommendation":"Maybe","evidence_refs":[],"rationale":"Using mock mode"}'
+    
+    try:
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+    except Exception:
+        pass
+
+    try:
+        model = genai.models.get("gemini-1.5-pro")
+        resp = genai.generate_text(model=model, text=prompt_text)
+        return resp.text if hasattr(resp, "text") else str(resp)
+    except Exception as e:
+        print(f"⚠️  Gemini call failed: {e}. Returning mock response.")
+        return '{"summary":"Mock analysis (Gemini unavailable)","key_points":["Mock"],"trust_score":50,"consent_recommendation":"Maybe","evidence_refs":[],"rationale":"Service unavailable"}'
 
 class RAGService:
     def __init__(self, index_path, meta_path):
@@ -30,23 +70,57 @@ class RAGService:
         evidence = build_evidence_block(reranked)
         prompt = RAG_PROMPT.format(context=evidence, query=user_text)
         llm_out = call_gemini(prompt)
-        # extract JSON substring robustly
+
+        query = user_text
+        response = llm_out
+
+        # Extract contexts
+        if isinstance(reranked, list) and all(isinstance(d, str) for d in reranked):
+            contexts = reranked
+        elif isinstance(retrieved, list) and all(isinstance(d, str) for d in retrieved):
+            contexts = retrieved
+        else:
+            contexts = []
+            for doc in (reranked or retrieved or []):
+                text = None
+                if hasattr(doc, "page_content"):
+                    text = getattr(doc, "page_content")
+                if text is None and isinstance(doc, dict):
+                    text = doc.get("text") or doc.get("page_content") or doc.get("pageContent")
+                if text is None:
+                    try:
+                        text = str(doc)
+                    except Exception:
+                        text = ""
+                if text:
+                    contexts.append(text)
+
+        evaluation_result = None
+        try:
+            evaluate_fn = get_evaluate_rag_pipeline()
+            if evaluate_fn:
+                evaluation_result = evaluate_fn(question=query, answer=response, contexts=contexts)
+                print("✅ RAGAS Evaluation:", evaluation_result)
+        except Exception as e:
+            print(f"⚠️  RAGAS evaluation failed (non-blocking): {str(e)}")
+
         j = self._extract_json(llm_out)
         j["_raw"] = llm_out
         j["_evidence"] = reranked
+        j["_evaluation"] = evaluation_result
         return j
 
     def _extract_json(self, text):
         start = text.find("{")
-        end = text.rfind("}")
-        if start==-1 or end==-1: return {"raw": text}
+        if start == -1:
+            return {"error": "no json found", "raw": text}
         try:
-            return json.loads(text[start:end+1])
+            j = json.loads(text[start:])
+            return j
         except Exception:
-            # best-effort cleaning
-            cleaned = text[start:end+1].replace("'", '"')
-            cleaned = re.sub(r",\s*}", "}", cleaned)
+            end = text.rfind("}")
             try:
-                return json.loads(cleaned)
+                j = json.loads(text[start:end+1])
+                return j
             except Exception:
-                return {"raw": text}
+                return {"error": "failed to parse json", "raw": text}
